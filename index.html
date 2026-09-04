@@ -428,7 +428,7 @@ async function convert(){
   try{
     const res=await fetch(state.apiUrl.replace(/\/+$/,""),{method:"POST",
       headers:{"Accept":"application/json","Content-Type":"application/json"},
-      body:JSON.stringify({url:file.url,downloadMode:"audio",audioFormat:file.format,audioBitrate:file.bitrate})});
+      body:JSON.stringify({url:file.url,downloadMode:"audio",audioFormat:file.format,audioBitrate:file.bitrate,alwaysProxy:true})});
     const data=await res.json();
     if(data.status==="error"){file.status="error";file.error=data.error?.code||"Erreur inconnue"}
     else if(data.status==="tunnel"||data.status==="redirect"){file.status="done";file.downloadUrl=data.url;if(data.filename)file.filename=data.filename}
@@ -444,9 +444,11 @@ async function saveToLibrary(id){
   if(!file||!file.downloadUrl)return;
   file.status="saving";renderDl();
   try{
-    const res=await fetch(file.downloadUrl);
+    // Fetch audio blob - use cors mode
+    const res=await fetch(file.downloadUrl, {mode:"cors"});
     if(!res.ok)throw new Error("HTTP "+res.status);
     const blob=await res.blob();
+    if(blob.size<10000)throw new Error("Fichier trop petit ("+blob.size+" octets) — le téléchargement a échoué. Réessaie la conversion.");
     const track={
       id:"t_"+Date.now(),
       title:file.filename.replace(/\.[^.]+$/,""),
@@ -465,7 +467,7 @@ async function saveToLibrary(id){
     state.library.unshift(track);
     file.status="saved";
   }catch(err){
-    file.status="error";file.error="Échec de sauvegarde: "+err.message;
+    file.status="error";file.error=err.message||"Échec de sauvegarde";
   }
   renderDl();
 }
@@ -495,7 +497,7 @@ function removeDl(id){state.dlFiles=state.dlFiles.filter(f=>f.id!==id);renderDl(
 async function retryDl(id){const f=state.dlFiles.find(x=>x.id===id);if(f){f.status="converting";f.error=null;renderDl();
   state.loading=true;updateConvertBtn();
   try{const res=await fetch(state.apiUrl.replace(/\/+$/,""),{method:"POST",headers:{"Accept":"application/json","Content-Type":"application/json"},
-    body:JSON.stringify({url:f.url,downloadMode:"audio",audioFormat:f.format,audioBitrate:f.bitrate})});
+    body:JSON.stringify({url:f.url,downloadMode:"audio",audioFormat:f.format,audioBitrate:f.bitrate,alwaysProxy:true})});
     const data=await res.json();
     if(data.status==="tunnel"||data.status==="redirect"){f.status="done";f.downloadUrl=data.url;if(data.filename)f.filename=data.filename}
     else{f.status="error";f.error=data.error?.code||"Erreur"}}
