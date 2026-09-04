@@ -426,51 +426,51 @@ async function convert(){
   state.loading=true;updateConvertBtn();
 
   try{
+    // Step 1: get tunnel URL from cobalt
     const res=await fetch(state.apiUrl.replace(/\/+$/,""),{method:"POST",
       headers:{"Accept":"application/json","Content-Type":"application/json"},
       body:JSON.stringify({url:file.url,downloadMode:"audio",audioFormat:file.format,audioBitrate:file.bitrate,alwaysProxy:true})});
     const data=await res.json();
-    if(data.status==="error"){file.status="error";file.error=data.error?.code||"Erreur inconnue"}
-    else if(data.status==="tunnel"||data.status==="redirect"){file.status="done";file.downloadUrl=data.url;if(data.filename)file.filename=data.filename}
-    else if(data.status==="picker"&&data.picker?.length>0){file.status="done";file.downloadUrl=data.audio||data.picker[0].url;if(data.filename)file.filename=data.filename}
-    else if(data.status==="local-processing"&&data.tunnel?.length>0){file.status="done";file.downloadUrl=data.tunnel[0];if(data.output?.filename)file.filename=data.output.filename}
-    else{file.status="error";file.error="Réponse inattendue: "+data.status}
-  }catch(err){file.status="error";file.error=err.message?.includes("fetch")?"Serveur cobalt injoignable":(err.message||"Erreur réseau")}
-  state.loading=false;updateConvertBtn();renderDl();
-}
 
-async function saveToLibrary(id){
-  const file=state.dlFiles.find(f=>f.id===id);
-  if(!file||!file.downloadUrl)return;
-  file.status="saving";renderDl();
-  try{
-    // Fetch audio blob - use cors mode
-    const res=await fetch(file.downloadUrl, {mode:"cors"});
-    if(!res.ok)throw new Error("HTTP "+res.status);
-    const blob=await res.blob();
-    if(blob.size<10000)throw new Error("Fichier trop petit ("+blob.size+" octets) — le téléchargement a échoué. Réessaie la conversion.");
+    let tunnelUrl=null;
+    if(data.status==="error"){throw new Error(data.error?.code||"Erreur cobalt")}
+    else if(data.status==="tunnel"||data.status==="redirect"){tunnelUrl=data.url;if(data.filename)file.filename=data.filename}
+    else if(data.status==="picker"&&data.picker?.length>0){tunnelUrl=data.audio||data.picker[0].url;if(data.filename)file.filename=data.filename}
+    else if(data.status==="local-processing"&&data.tunnel?.length>0){tunnelUrl=data.tunnel[0];if(data.output?.filename)file.filename=data.output.filename}
+    else{throw new Error("Réponse inattendue: "+data.status)}
+
+    if(!tunnelUrl)throw new Error("Pas d'URL de téléchargement");
+
+    // Step 2: download the audio blob immediately
+    file.status="saving";file.downloadUrl=tunnelUrl;renderDl();
+    const dlRes=await fetch(tunnelUrl);
+    if(!dlRes.ok)throw new Error("Téléchargement échoué (HTTP "+dlRes.status+")");
+    const blob=await dlRes.blob();
+    if(blob.size<5000)throw new Error("Fichier vide ou trop petit ("+blob.size+" octets)");
+
+    // Step 3: save to IndexedDB
     const track={
       id:"t_"+Date.now(),
       title:file.filename.replace(/\.[^.]+$/,""),
       artist:file.platform?.name||"Inconnu",
-      format:file.format,
-      bitrate:file.bitrate,
-      sourceUrl:file.url,
-      thumbUrl:file.thumb||null,
+      format:file.format, bitrate:file.bitrate,
+      sourceUrl:file.url, thumbUrl:file.thumb||null,
       platformColor:file.platform?.color||"#8B5CF6",
       platformIcon:file.platform?.icon||"♪",
-      blob:blob,
-      size:blob.size,
-      addedAt:Date.now()
+      blob:blob, size:blob.size, addedAt:Date.now()
     };
     await dbPut(track);
     state.library.unshift(track);
     file.status="saved";
   }catch(err){
-    file.status="error";file.error=err.message||"Échec de sauvegarde";
+    file.status="error";
+    file.error=err.message||"Erreur";
   }
-  renderDl();
+  state.loading=false;updateConvertBtn();renderDl();
 }
+
+async function saveToLibrary(id){/* now handled in convert() directly */}
+
 
 function renderDl(){
   const empty=document.getElementById("dlEmpty"),sec=document.getElementById("dlSection"),list=document.getElementById("dlList");
@@ -482,7 +482,6 @@ function renderDl(){
     const badge=f.status==="saved"?"done":f.status==="saving"?"saving":f.status;
     const badgeText={converting:"Conversion…",done:"Prêt",saving:"Sauvegarde…",saved:"Sauvegardé ✓",error:"Erreur"}[f.status]||"";
     let actions="";
-    if(f.status==="done")actions+=`<button class="btn-sm btn-save" onclick="saveToLibrary('${f.id}')" title="Sauvegarder">💾</button>`;
     if(f.status==="error")actions+=`<button class="btn-sm btn-retry" onclick="retryDl('${f.id}')">↻</button>`;
     if(f.status!=="converting"&&f.status!=="saving")actions+=`<button class="btn-sm btn-remove" onclick="removeDl('${f.id}')">✕</button>`;
     return`<div class="dl-item">
@@ -494,15 +493,30 @@ function renderDl(){
   }).join("");
 }
 function removeDl(id){state.dlFiles=state.dlFiles.filter(f=>f.id!==id);renderDl()}
-async function retryDl(id){const f=state.dlFiles.find(x=>x.id===id);if(f){f.status="converting";f.error=null;renderDl();
+async function retryDl(id){const f=state.dlFiles.find(x=>x.id===id);if(!f)return;
+  f.status="converting";f.error=null;renderDl();
   state.loading=true;updateConvertBtn();
-  try{const res=await fetch(state.apiUrl.replace(/\/+$/,""),{method:"POST",headers:{"Accept":"application/json","Content-Type":"application/json"},
-    body:JSON.stringify({url:f.url,downloadMode:"audio",audioFormat:f.format,audioBitrate:f.bitrate,alwaysProxy:true})});
+  try{
+    const res=await fetch(state.apiUrl.replace(/\/+$/,""),{method:"POST",headers:{"Accept":"application/json","Content-Type":"application/json"},
+      body:JSON.stringify({url:f.url,downloadMode:"audio",audioFormat:f.format,audioBitrate:f.bitrate,alwaysProxy:true})});
     const data=await res.json();
-    if(data.status==="tunnel"||data.status==="redirect"){f.status="done";f.downloadUrl=data.url;if(data.filename)f.filename=data.filename}
-    else{f.status="error";f.error=data.error?.code||"Erreur"}}
-  catch(err){f.status="error";f.error=err.message||"Erreur réseau"}
-  state.loading=false;updateConvertBtn();renderDl()}}
+    let tunnelUrl=null;
+    if(data.status==="tunnel"||data.status==="redirect"){tunnelUrl=data.url;if(data.filename)f.filename=data.filename}
+    else if(data.status==="picker"&&data.picker?.length>0){tunnelUrl=data.audio||data.picker[0].url}
+    else{throw new Error(data.error?.code||"Erreur")}
+    if(!tunnelUrl)throw new Error("Pas d'URL");
+    f.status="saving";renderDl();
+    const dlRes=await fetch(tunnelUrl);
+    if(!dlRes.ok)throw new Error("HTTP "+dlRes.status);
+    const blob=await dlRes.blob();
+    if(blob.size<5000)throw new Error("Fichier vide");
+    const track={id:"t_"+Date.now(),title:f.filename.replace(/\.[^.]+$/,""),artist:f.platform?.name||"Inconnu",
+      format:f.format,bitrate:f.bitrate,sourceUrl:f.url,thumbUrl:f.thumb||null,
+      platformColor:f.platform?.color||"#8B5CF6",platformIcon:f.platform?.icon||"♪",
+      blob:blob,size:blob.size,addedAt:Date.now()};
+    await dbPut(track);state.library.unshift(track);f.status="saved";
+  }catch(err){f.status="error";f.error=err.message||"Erreur"}
+  state.loading=false;updateConvertBtn();renderDl()}
 
 /* ═══════════════════════════════════════
    LIBRARY
