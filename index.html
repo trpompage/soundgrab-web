@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -439,32 +438,28 @@ async function convert(){
   state.loading=true;updateConvertBtn();
 
   try{
-    // Step 1: get tunnel URL from cobalt
-    const res=await fetch(state.apiUrl.replace(/\/+$/,""),{method:"POST",
-      headers:{"Accept":"application/json","Content-Type":"application/json"},
-      body:JSON.stringify({url:file.url,downloadMode:"audio",audioFormat:file.format,audioBitrate:file.bitrate,alwaysProxy:true})});
-    const data=await res.json();
+    // Single request: server calls cobalt + downloads the audio + streams it back
+    const res=await fetch("/convert",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({url:file.url,audioFormat:file.format,audioBitrate:file.bitrate})});
 
-    let tunnelUrl=null;
-    if(data.status==="error"){throw new Error(data.error?.code||"Erreur cobalt")}
-    else if(data.status==="tunnel"||data.status==="redirect"){tunnelUrl=data.url;if(data.filename)file.filename=data.filename}
-    else if(data.status==="picker"&&data.picker?.length>0){tunnelUrl=data.audio||data.picker[0].url;if(data.filename)file.filename=data.filename}
-    else if(data.status==="local-processing"&&data.tunnel?.length>0){tunnelUrl=data.tunnel[0];if(data.output?.filename)file.filename=data.output.filename}
-    else{throw new Error("Réponse inattendue: "+data.status)}
+    // Check for error response (JSON)
+    const ct=res.headers.get("content-type")||"";
+    if(ct.includes("application/json")){
+      const err=await res.json();
+      throw new Error(err.error||"Erreur cobalt");
+    }
+    if(!res.ok)throw new Error("HTTP "+res.status);
 
-    if(!tunnelUrl)throw new Error("Pas d'URL de téléchargement");
+    // Get filename from header
+    const xfn=res.headers.get("x-filename");
+    if(xfn)file.filename=decodeURIComponent(xfn);
 
-    // Rewrite tunnel URL to go through same-origin proxy
-    tunnelUrl=rewriteTunnelUrl(tunnelUrl);
-
-    // Step 2: download the audio blob immediately
-    file.status="saving";file.downloadUrl=tunnelUrl;renderDl();
-    const dlRes=await fetch(tunnelUrl);
-    if(!dlRes.ok)throw new Error("Téléchargement échoué (HTTP "+dlRes.status+")");
-    const blob=await dlRes.blob();
+    file.status="saving";renderDl();
+    const blob=await res.blob();
     if(blob.size<5000)throw new Error("Fichier vide ou trop petit ("+blob.size+" octets)");
 
-    // Step 3: save to IndexedDB
+    // Save to IndexedDB
     const track={
       id:"t_"+Date.now(),
       title:file.filename.replace(/\.[^.]+$/,""),
@@ -485,7 +480,7 @@ async function convert(){
   state.loading=false;updateConvertBtn();renderDl();
 }
 
-async function saveToLibrary(id){/* now handled in convert() directly */}
+async function saveToLibrary(id){/* handled in convert() */}
 
 
 function renderDl(){
@@ -513,19 +508,15 @@ async function retryDl(id){const f=state.dlFiles.find(x=>x.id===id);if(!f)return
   f.status="converting";f.error=null;renderDl();
   state.loading=true;updateConvertBtn();
   try{
-    const res=await fetch(state.apiUrl.replace(/\/+$/,""),{method:"POST",headers:{"Accept":"application/json","Content-Type":"application/json"},
-      body:JSON.stringify({url:f.url,downloadMode:"audio",audioFormat:f.format,audioBitrate:f.bitrate,alwaysProxy:true})});
-    const data=await res.json();
-    let tunnelUrl=null;
-    if(data.status==="tunnel"||data.status==="redirect"){tunnelUrl=data.url;if(data.filename)f.filename=data.filename}
-    else if(data.status==="picker"&&data.picker?.length>0){tunnelUrl=data.audio||data.picker[0].url}
-    else{throw new Error(data.error?.code||"Erreur")}
-    if(!tunnelUrl)throw new Error("Pas d'URL");
-    tunnelUrl=rewriteTunnelUrl(tunnelUrl);
+    const res=await fetch("/convert",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({url:f.url,audioFormat:f.format,audioBitrate:f.bitrate})});
+    const ct=res.headers.get("content-type")||"";
+    if(ct.includes("application/json")){const err=await res.json();throw new Error(err.error||"Erreur")}
+    if(!res.ok)throw new Error("HTTP "+res.status);
+    const xfn=res.headers.get("x-filename");
+    if(xfn)f.filename=decodeURIComponent(xfn);
     f.status="saving";renderDl();
-    const dlRes=await fetch(tunnelUrl);
-    if(!dlRes.ok)throw new Error("HTTP "+dlRes.status);
-    const blob=await dlRes.blob();
+    const blob=await res.blob();
     if(blob.size<5000)throw new Error("Fichier vide");
     const track={id:"t_"+Date.now(),title:f.filename.replace(/\.[^.]+$/,""),artist:f.platform?.name||"Inconnu",
       format:f.format,bitrate:f.bitrate,sourceUrl:f.url,thumbUrl:f.thumb||null,
