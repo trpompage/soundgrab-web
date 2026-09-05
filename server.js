@@ -60,7 +60,7 @@ async function handleConvert(req, res) {
     const p = JSON.parse(body);
     console.log("Convert request:", p.url);
     const apiBody = JSON.stringify({ url: p.url, downloadMode: "audio",
-      audioFormat: p.audioFormat || "mp3", audioBitrate: p.audioBitrate || "128", alwaysProxy: true });
+      audioFormat: p.audioFormat || "mp3", audioBitrate: p.audioBitrate || "128" });
 
     const apiRes = await httpsReq({ hostname: COBALT, port: 443, path: "/", method: "POST",
       headers: { "Content-Type": "application/json", "Accept": "application/json",
