@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -211,7 +212,7 @@ button{cursor:pointer}
     </div>
     <div>
       <div class="settings-label">SERVEUR COBALT</div>
-      <input class="api-input" id="apiInput" type="url" value="https://cobalt-production-90d3.up.railway.app/"
+      <input class="api-input" id="apiInput" type="url" value="/api"
         onchange="state.apiUrl=this.value">
     </div>
   </div>
@@ -341,7 +342,7 @@ const BITRATES = [{id:"320",label:"320",sub:"Max"},{id:"256",label:"256",sub:"Ha
 
 const state = {
   url:"", format:"mp3", bitrate:"128",
-  apiUrl:"https://cobalt-production-90d3.up.railway.app/",
+  apiUrl:"/api",
   dlFiles:[], settingsOpen:false, loading:false,
   library:[], currentTrackId:null, playing:false,
   ctxTrackId:null
@@ -375,6 +376,18 @@ function ytThumb(url){
   return null;
 }
 function fmtTime(s){if(!s||!isFinite(s))return"0:00";const m=Math.floor(s/60);return m+":"+(Math.floor(s%60)+"").padStart(2,"0")}
+
+// Rewrite cobalt tunnel URLs to go through our nginx proxy (same origin = no CORS)
+function rewriteTunnelUrl(url){
+  if(!url)return url;
+  try{
+    const u=new URL(url);
+    if(u.pathname.startsWith("/tunnel")){
+      return"/tunnel"+u.search;
+    }
+  }catch{}
+  return url;
+}
 
 /* ═══════════════════════════════════════
    TAB SWITCHING
@@ -441,6 +454,9 @@ async function convert(){
 
     if(!tunnelUrl)throw new Error("Pas d'URL de téléchargement");
 
+    // Rewrite tunnel URL to go through same-origin proxy
+    tunnelUrl=rewriteTunnelUrl(tunnelUrl);
+
     // Step 2: download the audio blob immediately
     file.status="saving";file.downloadUrl=tunnelUrl;renderDl();
     const dlRes=await fetch(tunnelUrl);
@@ -505,6 +521,7 @@ async function retryDl(id){const f=state.dlFiles.find(x=>x.id===id);if(!f)return
     else if(data.status==="picker"&&data.picker?.length>0){tunnelUrl=data.audio||data.picker[0].url}
     else{throw new Error(data.error?.code||"Erreur")}
     if(!tunnelUrl)throw new Error("Pas d'URL");
+    tunnelUrl=rewriteTunnelUrl(tunnelUrl);
     f.status="saving";renderDl();
     const dlRes=await fetch(tunnelUrl);
     if(!dlRes.ok)throw new Error("HTTP "+dlRes.status);
